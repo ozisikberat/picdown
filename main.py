@@ -2,8 +2,6 @@ import os
 import requests
 import streamlit as st
 from dotenv import load_dotenv
-from PIL import Image
-import shutil
 
 # .env dosyasını yükle
 load_dotenv()
@@ -14,11 +12,22 @@ API_KEY = os.getenv('PIXABAY_API_KEY')
 
 # Pixabay API ile görsel arama fonksiyonu
 def pixabay_arsiv_sorgula(anahtar_kelime, kategori, sayfa=1):
-    url = f'https://pixabay.com/api/?key={API_KEY}&q={anahtar_kelime}&image_type=photo&orientation=horizontal&page={sayfa}&per_page=10&category={kategori}'
+    url = f'https://pixabay.com/api/?key={API_KEY}&q={anahtar_kelime}&image_type=photo&orientation=horizontal&page={sayfa}&per_page=10'
+
+    # Kategori parametresi varsa URL'ye ekle
+    if kategori:
+        url += f'&category={kategori}'
+
     response = requests.get(url)
     try:
         response.raise_for_status()  # Hata durumunda exception fırlatır
         data = response.json()
+
+        # Eğer görsel bulunamazsa bilgi verelim
+        if data['totalHits'] == 0:
+            st.warning("Hiç görsel bulunamadı.")
+            return []
+
         return data['hits']
     except requests.exceptions.RequestException as e:
         st.error(f'Hata: {e}')
@@ -28,39 +37,42 @@ def pixabay_arsiv_sorgula(anahtar_kelime, kategori, sayfa=1):
         return []
 
 
-# Görseli göster ve indir fonksiyonu
-def gorsel_goster_ve_indir(gorsel_url, gorsel_basligi):
+# Görseli indir fonksiyonu
+def gorsel_indir(gorsel_url, dosya_adi):
     try:
         # URL'den görseli indir
         img_data = requests.get(gorsel_url).content
-        klasor_adi = gorsel_basligi.split()[0]  # İlk kelimeden klasör ismi oluştur
-        klasor_yolu = f"downloads/{klasor_adi}"
 
-        # Eğer klasör yoksa oluştur
-        if not os.path.exists(klasor_yolu):
-            os.makedirs(klasor_yolu)
-
-        # Görseli kaydet
-        with open(f"{klasor_yolu}/{gorsel_basligi}.jpg", 'wb') as f:
+        # Görseli kaydetmeden önce bir dosya adı oluştur
+        dosya_yolu = f"downloads/{dosya_adi}.jpg"
+        with open(dosya_yolu, 'wb') as f:
             f.write(img_data)
 
-        st.image(img_data, caption=gorsel_basligi, use_column_width=True)
-        st.success(f"Görsel {klasor_yolu}/{gorsel_basligi}.jpg olarak kaydedildi.")
+        return dosya_yolu
     except Exception as e:
-        st.error(f"Bir hata oluştu: {e}")
+        return f"Bir hata oluştu: {e}"
 
 
 # Streamlit arayüzü
 def main():
     st.title("Pixabay Görsel Arama ve İndirme Uygulaması")
 
-    # Kullanıcıdan anahtar kelime ve kategori al
-    anahtar_kelime = st.text_input("Aramak istediğiniz görseli yazın:")
-    kategori_sec = st.selectbox("Kategori seçin:",
-                                ["Tüm Kategoriler", "Araba", "Doğa", "Meyve", "Hayvanlar", "İnsanlar"])
+    # Sidebar'a arama kısmı taşıyoruz
+    st.sidebar.title("Arama Kriterleri")
+    anahtar_kelime = st.sidebar.text_input("Aramak istediğiniz görseli yazın:")
+    kategori_sec = st.sidebar.selectbox("Kategori seçin:",
+                                        ["Tüm Kategoriler", "Araba", "Doğa", "Meyve", "Hayvanlar", "İnsanlar"])
 
-    if anahtar_kelime:
-        st.write(f"Arama sonuçları: {anahtar_kelime}")
+    # Arama butonunu ekle
+    arama_butonu = st.sidebar.button("Görsel Ara")
+
+    # Görselleri session_state'ye kaydedelim
+    if "gorseller" not in st.session_state:
+        st.session_state.gorseller = []
+
+    # Arama butonuna basıldığında yeni arama yapalım
+    if arama_butonu and anahtar_kelime:
+        st.sidebar.write(f"Arama sonuçları: {anahtar_kelime}")
 
         kategori_map = {
             "Tüm Kategoriler": "",
@@ -76,19 +88,39 @@ def main():
         # Görselleri al
         gorseller = pixabay_arsiv_sorgula(anahtar_kelime, kategori)
 
-        # Görselleri göster
+        # Görselleri session_state'e kaydediyoruz
         if gorseller:
-            for gorsel in gorseller:
-                gorsel_url = gorsel['webformatURL']
-                gorsel_basligi = gorsel['tags']
+            st.session_state.gorseller = gorseller
 
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.image(gorsel_url, caption=gorsel_basligi, use_column_width=True)
-                with col2:
-                    if st.button(f"Görseli indir: {gorsel_basligi}", key=gorsel_basligi):
-                        gorsel_goster_ve_indir(gorsel_url, gorsel_basligi)
+    # Görselleri ekrana yerleştiriyoruz
+    if st.session_state.gorseller:
+        # Streamlit widget’ları ile görselleri 3 sütun halinde göstermek için
+        cols = st.columns(3)  # 3 sütunlu düzen
+        col_index = 0
+        selected_images = []  # Seçilen görselleri tutmak için liste
 
+        # Görselleri ekleyelim
+        for index, gorsel in enumerate(st.session_state.gorseller):
+            gorsel_url = gorsel['webformatURL']  # Görsel URL'sini al
+            dosya_adi = f"{anahtar_kelime.replace(' ', '_')}_{index + 1}"  # Dosya adı, anahtar kelime + sıralama numarası
 
+            with cols[col_index]:
+                # Görseli gösteriyoruz
+                st.image(gorsel_url, use_container_width =True)
+
+                # "İndir" butonu ekleyelim, Streamlit'in dosya indirme butonu
+                img_data = requests.get(gorsel_url).content  # Görseli indiriyoruz
+                if st.download_button(
+                        label="Görseli İndir",
+                        data=img_data,
+                        file_name=f"{dosya_adi}.jpg",
+                        mime="image/jpeg"
+                ):
+                    selected_images.append(dosya_adi)  # İndirilen görselin dosya adı
+
+            # Kolonları döngü ile sıralıyoruz
+            col_index += 1
+            if col_index == 3:  # Her 3 görselde bir yeni satıra geç
+                col_index = 0
 if __name__ == "__main__":
     main()
